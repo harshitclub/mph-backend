@@ -45,3 +45,5 @@
  * This prevents invalid data from reaching the database.
  * * Closes #145
  * */
+
+// docker run --name redis_queue -p 6380:6379 -d redis:alpine3.22
