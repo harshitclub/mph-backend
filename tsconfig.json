@@ -8,6 +8,7 @@
     // Environment Settings
     "module": "nodenext",
     "target": "esnext",
+    "moduleResolution": "NodeNext",
     "types": [],
 
     // Other Outputs

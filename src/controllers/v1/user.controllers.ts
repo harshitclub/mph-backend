@@ -36,7 +36,7 @@ import { emailQueue } from '../../queues/email.queue'
 import { verifyEmailTemplate } from '../../emails/templates/auth/verify-email'
 
 // Prisma Types
-import { Prisma } from '../../../generated/prisma'
+import { Prisma } from '../../generated/prisma/client'
 import redisCache from '../../configs/redisCache'
 import { loginValidator } from '../../validators/common.validator'
 import { isObject } from '../../utils/isObject'
