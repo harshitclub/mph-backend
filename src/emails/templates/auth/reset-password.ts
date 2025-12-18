@@ -11,7 +11,7 @@ export const resetPasswordEmailTemplate = ({
     <html>
     <body>
     <h1>${name}</h1>
-    <p><a href="${config.FRONTEND_URL}/verify/${token}"></a></p>
+    <p><a href="${config.FRONTEND_URL}/reset-password/${token}">${token}</a></p>
     </body>
     </html>
     `
