@@ -1,24 +1,18 @@
 import { NextFunction, Request, Response } from 'express'
-import { TokenExpiredError, JwtPayload } from 'jsonwebtoken'
+import { JwtPayload, TokenExpiredError } from 'jsonwebtoken'
 import { Messages } from '../configs/messages'
 import { AppError } from '../utils/appError'
 import { verifyAccessToken } from '../utils/tokens/accessToken'
 import { prisma } from '../configs/prisma'
 import { logger } from '../configs/logger'
-import { AccessTokenPayload } from '../types/accessTokenPayload'
 
-declare module 'express-serve-static-core' {
-  interface Request {
-    user?: AccessTokenPayload
-  }
-}
-
-export async function authenticateUser(
+export async function authenticateAdmin(
   req: Request,
   res: Response,
   next: NextFunction
 ) {
   try {
+    // 1. Extract Authorization Header
     const authHeader = req.headers.authorization
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       throw new AppError(Messages.TOKEN_REQUIRED, 401)
@@ -29,19 +23,17 @@ export async function authenticateUser(
       throw new AppError(Messages.TOKEN_INVALID, 401)
     }
 
-    // 1. Use standard JwtPayload for the raw decoded token
-    // (This contains 'sub', 'iat', 'exp', etc.)
+    // 2. Verify Token (Strict Typing)
+    // We use JwtPayload to read the raw 'sub' field
     let decoded: JwtPayload | null = null
 
     try {
       const verificationResult = verifyAccessToken(token)
 
-      // verifyAccessToken returns string | JwtPayload. We handle string (invalid) first.
       if (typeof verificationResult === 'string') {
         throw new AppError(Messages.TOKEN_INVALID, 401)
       }
 
-      // Safe to assign because verificationResult is now guaranteed to be an object
       decoded = verificationResult
     } catch (err) {
       if (err instanceof TokenExpiredError) {
@@ -50,35 +42,41 @@ export async function authenticateUser(
       throw new AppError(Messages.TOKEN_INVALID, 401)
     }
 
-    // 2. Check for .sub (Standard JWT Subject field)
     if (!decoded || !decoded.sub) {
       throw new AppError(Messages.TOKEN_INVALID, 401)
     }
 
-    // 3. Find User using 'sub'
-    const user = await prisma.user.findUnique({
-      where: { id: decoded.sub }, // .sub is a string in JwtPayload
+    // 3. The Critical Difference: Query the ADMIN Table
+    // We do NOT look at prisma.user. We only look at prisma.admin.
+    const admin = await prisma.admin.findUnique({
+      where: { id: decoded.sub }, // Use 'sub' to find the admin
       select: {
         id: true,
         email: true,
         firstName: true,
         lastName: true,
-        role: true,
-        isDisabled: true
+        role: true
+        // isSuperAdmin: true // Uncomment if you need this logic later
       }
     })
 
-    if (!user || user.isDisabled) {
-      throw new AppError(Messages.ACCOUNT_LOCKED, 403)
+    // 4. Verify Admin Status
+    // If the ID in the token does not exist in the Admin table, deny access.
+    // This stops regular Users (who have valid tokens) from accessing Admin routes.
+    if (!admin || admin.role !== 'ADMIN') {
+      logger.warn(
+        `Access Denied: Non-admin tried to access admin route | id=${decoded.sub}`
+      )
+      throw new AppError(Messages.ACCESS_DENIED, 403)
     }
 
-    // 4. Map DB result to your custom AccessTokenPayload interface
-    // This bridges the gap between the token structure (sub) and your app structure (id)
+    // 5. Attach Admin Identity (The "Bridge")
+    // We map the Admin DB fields to your standard AccessTokenPayload interface.
     req.user = {
-      id: user.id,
-      email: user.email,
-      name: `${user.firstName} ${user.lastName}`,
-      role: user.role
+      id: admin.id,
+      email: admin.email,
+      name: `${admin.firstName} ${admin.lastName}`,
+      role: admin.role // This will be 'ADMIN'
     }
 
     return next()
@@ -86,7 +84,7 @@ export async function authenticateUser(
     if (error instanceof AppError) {
       return next(error)
     }
-    logger.warn(`Auth middleware error | ip=${req.ip} | error=${error}`)
+    logger.warn(`Admin Auth middleware error | ip=${req.ip} | error=${error}`)
     return next(error)
   }
 }

@@ -3,4 +3,5 @@ export interface AccessTokenPayload {
   email: string
   name: string
   role: string
+  isSuperAdmin?: boolean
 }
