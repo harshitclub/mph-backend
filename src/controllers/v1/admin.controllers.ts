@@ -2,7 +2,7 @@ import { Request, Response } from 'express'
 import { logger } from '../../configs/logger'
 import { Messages } from '../../configs/messages'
 import { prisma } from '../../configs/prisma'
-import { verifyEmailTemplate } from '../../emails/templates/auth/verify-email'
+import { verifyEmailTemplate } from '../../emails/templates/auth/WelcomeEmail.tsx'
 import { emailQueue } from '../../queues/email.queue'
 import { AppError } from '../../utils/appError'
 import { maskEmail } from '../../utils/mask'
@@ -33,7 +33,7 @@ import {
 } from '../../validators/user.validator'
 import { isObject } from '../../utils/isObject'
 import { generateResetPasswordTokenRaw } from '../../utils/tokens/resetPasswordToken'
-import { resetPasswordEmailTemplate } from '../../emails/templates/auth/reset-password'
+import { resetPasswordEmailTemplate } from '../../emails/templates/auth/ResetPassword'
 
 const { REFRESH_COOKIE_NAME, REFRESH_COOKIE_PATH, REFRESH_TTL_MS } =
   config.COOKIE
