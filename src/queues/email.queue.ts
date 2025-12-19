@@ -3,7 +3,10 @@ import crypto from 'crypto'
 import { redisBull } from '../configs/redisBull'
 
 // 1. Define Names
-export type EmailJobName = 'verificationEmail' | 'resetPasswordEmail'
+export type EmailJobName =
+  | 'verificationEmail'
+  | 'resetPasswordEmail'
+  | 'reVerificationEmail'
 // Future: | 'invoiceEmail' | 'welcomeNewTeamMember'
 
 // 2. Define Payloads for EACH email type
@@ -25,6 +28,15 @@ export interface ResetPasswordPayload {
   }
 }
 
+export interface ReVerificationPayload {
+  type: 'reVerificationEmail'
+  to: string
+  data: {
+    firstName: string
+    token: string
+  }
+}
+
 // Future example:
 // export interface InvoiceEmailPayload {
 //   type: 'invoiceEmail'
@@ -33,7 +45,10 @@ export interface ResetPasswordPayload {
 // }
 
 // 3. Create the Master Union Type
-export type EmailJobData = VerificationEmailPayload | ResetPasswordPayload
+export type EmailJobData =
+  | VerificationEmailPayload
+  | ResetPasswordPayload
+  | ReVerificationPayload
 
 export const emailQueue = new Queue<EmailJobData, unknown, EmailJobName>(
   'emailQueue',
