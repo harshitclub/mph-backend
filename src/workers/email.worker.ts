@@ -3,31 +3,39 @@ import { logger } from '../configs/logger'
 import { redisBull } from '../configs/redisBull'
 import { config } from '../configs/config'
 import { sendEmail } from '../utils/sendEmail'
-
-type EmailJobName = 'verificationEmail' | 'resetPasswordEmail'
-
-interface EmailPayload {
-  to: string
-  subject: string
-  html: string
-}
+import { EmailRenderService } from '../services/emailRenderService' // Import the registry
+import { EmailJobData, EmailJobName } from '../queues/email.queue'
 
 const processor = async (
-  job: Job<EmailPayload, unknown, EmailJobName>
+  job: Job<EmailJobData, unknown, EmailJobName>
 ): Promise<void> => {
   logger.info(`Processing job: ${job.name}`, { jobId: job.id })
 
-  switch (job.name) {
-    case 'verificationEmail':
-    case 'resetPasswordEmail':
-      await sendEmail(job.data)
-      break
-    default:
-      logger.warn('Unknown job type', { jobName: job.name })
+  const { to } = job.data
+
+  try {
+    // 1. Delegate Rendering to the Service
+    // This keeps the worker file clean and "dumb"
+    const { html, subject } = await EmailRenderService.render(job.data)
+
+    // 2. Send Email
+    await sendEmail({
+      to,
+      subject,
+      html
+    })
+
+    logger.info(`Email sent successfully: ${job.name}`, {
+      email: to,
+      jobId: job.id
+    })
+  } catch (error) {
+    logger.error(`Failed to process job ${job.name}:`, error)
+    throw error
   }
 }
 
-const emailWorker = new Worker<EmailPayload, unknown, EmailJobName>(
+const emailWorker = new Worker<EmailJobData, unknown, EmailJobName>(
   'emailQueue',
   processor,
   {
@@ -35,6 +43,8 @@ const emailWorker = new Worker<EmailPayload, unknown, EmailJobName>(
     concurrency: Number(config.WORKERS.EMAIL_CONCURRENCY) || 5
   }
 )
+
+// --- Worker Event Listeners (Observability) ---
 
 emailWorker.on('active', (job) => {
   logger.info('Job active', { jobId: job.id, name: job.name })
@@ -59,6 +69,7 @@ emailWorker.on('drained', () => {
   logger.info('Queue drained (no waiting jobs)')
 })
 
+// Graceful Shutdown
 process.on('SIGINT', async () => {
   logger.info('SIGINT: shutting down worker gracefully...')
   await emailWorker.close()

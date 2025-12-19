@@ -2,13 +2,38 @@ import { Queue, JobsOptions } from 'bullmq'
 import crypto from 'crypto'
 import { redisBull } from '../configs/redisBull'
 
+// 1. Define Names
 export type EmailJobName = 'verificationEmail' | 'resetPasswordEmail'
+// Future: | 'invoiceEmail' | 'welcomeNewTeamMember'
 
-export interface EmailJobData {
+// 2. Define Payloads for EACH email type
+export interface VerificationEmailPayload {
+  type: 'verificationEmail'
   to: string
-  subject: string
-  html: string
+  data: {
+    firstName: string
+    token: string
+  }
 }
+
+export interface ResetPasswordPayload {
+  type: 'resetPasswordEmail'
+  to: string
+  data: {
+    firstName: string
+    token: string
+  }
+}
+
+// Future example:
+// export interface InvoiceEmailPayload {
+//   type: 'invoiceEmail'
+//   to: string
+//   data: { amount: number; currency: string }
+// }
+
+// 3. Create the Master Union Type
+export type EmailJobData = VerificationEmailPayload | ResetPasswordPayload
 
 export const emailQueue = new Queue<EmailJobData, unknown, EmailJobName>(
   'emailQueue',
@@ -18,26 +43,28 @@ export const emailQueue = new Queue<EmailJobData, unknown, EmailJobName>(
       attempts: 3,
       backoff: { type: 'exponential', delay: 5000 },
       removeOnComplete: { age: 3600 },
-      removeOnFail: false
+      removeOnFail: { age: 24 * 3600 }
     }
   }
 )
 
-function buildJobId(name: EmailJobName, data: EmailJobData) {
+/**
+ * Generate a unique ID based on the payload to prevent duplicates
+ */
+function buildJobId(payload: EmailJobData) {
   const hash = crypto
     .createHash('sha256')
-    .update(JSON.stringify({ name, data }))
+    .update(JSON.stringify(payload))
     .digest('hex')
     .slice(0, 16)
-  return `${name}:${hash}`
+  return `${payload.type}-${hash}`
 }
 
 export async function enqueueEmail(
-  name: EmailJobName,
-  data: EmailJobData,
+  payload: EmailJobData,
   opts?: JobsOptions & { jobId?: string }
 ) {
-  // caller can pass a custom jobId; otherwise we generate a deterministic one
-  const jobId = opts?.jobId ?? buildJobId(name, data)
-  return emailQueue.add(name, data, { ...opts, jobId })
+  const jobId = opts?.jobId ?? buildJobId(payload)
+  // We use payload.type as the job name for clarity
+  return emailQueue.add(payload.type, payload, { ...opts, jobId })
 }

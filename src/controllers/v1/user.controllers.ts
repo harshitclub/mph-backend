@@ -30,8 +30,8 @@ import { generateVerificationTokenRaw } from '../../utils/tokens/verificationTok
 import { sha256Hex } from '../../utils/tokens/sha256Hex'
 
 // Email
-import { emailQueue } from '../../queues/email.queue'
-import { verifyEmailTemplate } from '../../emails/templates/auth/verify-email'
+import { enqueueEmail } from '../../queues/email.queue'
+// import { verifyEmailTemplate } from '../../emails/templates/auth/WelcomeEmail.tsx'
 
 // Prisma Types
 import { Prisma } from '../../generated/prisma/client'
@@ -45,7 +45,7 @@ import {
 } from '../../validators/common.validator'
 import { isObject } from '../../utils/isObject'
 import { getUser } from '../../utils/getUser'
-import { resetPasswordEmailTemplate } from '../../emails/templates/auth/reset-password'
+// import { resetPasswordEmailTemplate } from '../../emails/templates/auth/ResetPassword'
 import { generateResetPasswordTokenRaw } from '../../utils/tokens/resetPasswordToken'
 
 const { REFRESH_COOKIE_NAME, REFRESH_COOKIE_PATH, REFRESH_TTL_MS } =
@@ -53,22 +53,22 @@ const { REFRESH_COOKIE_NAME, REFRESH_COOKIE_PATH, REFRESH_TTL_MS } =
 const { MAX_FAILED_LOGIN } = config.AUTH
 
 /**
- * Register a new user account.
- *
- * Flow:
- *  - Validate user input (firstName, lastName, email, password).
- *  - Hash the password before saving.
- *  - Generate a verification token (raw + hashed) and store the hashed version.
- *  - Send a verification email containing the raw token.
- *  - Return a safe user response (no password or sensitive data included).
- *
- * @param req - Express request object
- * @param res - Express response object
- * @returns JSON success response with user info
- * @throws AppError - If validation fails or email already exists
+ * Handles new user registration.
+ * * **Flow:**
+ * 1. Validates request body against schema.
+ * 2. Pre-checks user existence to save CPU.
+ * 3. Hashes password and generates secure verification tokens.
+ * 4. Persists user to database using a selective return.
+ * 5. Offloads email delivery to a background queue.
+ * * @param req Express request object containing signup details in body.
+ * @param res Express response object.
+ * @throws {AppError} 400 - If validation fails or if a race condition occurs.
+ * @throws {AppError} 409 - If the user email is already registered.
+ * @returns 201 Created with safe user profile data.
  */
 export async function userSignup(req: Request, res: Response) {
   // 1. Validate payload (Fail Fast)
+  // Ensures we don't waste resources processing malformed or malicious data.
   const parsed = await signupUserValidator.safeParseAsync(req.body)
   if (!parsed.success) {
     // Optimization: Return specific field errors so frontend can show "Password too short"
@@ -78,6 +78,8 @@ export async function userSignup(req: Request, res: Response) {
   const { firstName, lastName, email, password } = parsed.data
 
   // 2. Optimization: Check existence BEFORE hashing (Saves CPU)
+  // Password hashing is intentionally slow to prevent brute force;
+  // checking the DB first prevents unnecessary CPU load on duplicate requests.
   const existingUser = await prisma.user.findUnique({
     where: { email },
     select: { id: true } // Select minimal data
@@ -94,10 +96,13 @@ export async function userSignup(req: Request, res: Response) {
   const passwordHash = await hashPassword(password)
 
   // 4. Generate email verification token (raw sent to user, hash stored in DB)
+  // We store the hash of the token (SHA-256) so that if the DB is compromised,
+  // an attacker cannot spoof email verification.
   const { raw: rawToken, expiresAt } = generateVerificationTokenRaw(15)
   const tokenHash = sha256Hex(rawToken)
 
   // 5. Get Real IP (Handle Proxy/CloudFront)
+  // Uses X-Forwarded-For to capture the actual client IP when behind a load balancer.
   const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0] || req.ip
 
   try {
@@ -112,6 +117,7 @@ export async function userSignup(req: Request, res: Response) {
         emailVerificationExpiresAt: expiresAt,
         emailVerificationUsed: false
       },
+      // Explicitly selecting fields prevents 'Accidental Data Leakage' (e.g., returning the passwordHash).
       select: {
         id: true,
         firstName: true,
@@ -123,22 +129,27 @@ export async function userSignup(req: Request, res: Response) {
 
     try {
       // Send verification email (async background job)
-      await emailQueue.add('verificationEmail', {
+      // Using a queue ensures the user receives a response immediately
+      // even if the SMTP server is slow or down.
+      await enqueueEmail({
+        type: 'verificationEmail', // TypeScript will autocomplete this!
         to: user.email,
-        subject: 'Verify Your Email',
-        html: verifyEmailTemplate({
-          name: user.firstName,
+        data: {
+          firstName: user.firstName,
           token: rawToken
-        })
+          // If you miss 'token' here, TypeScript will throw an error immediately.
+        }
       })
     } catch (queueError) {
+      // Non-blocking failure: Account is created, we just failed to queue the welcome email.
+      // SREs/Ops can monitor these logs to retry failed jobs manually.
       logger.error(
         `Failed to queue verification email | userId=${user.id} | error=${queueError}`
       )
       // We do NOT throw here. We let the user signup succeed.
     }
 
-    // Log successful account creation (mask email for privacy)
+    // Log successful account creation (mask email for privacy/GDPR compliance)
     logger.info(
       `${Messages.USER_CREATED} | userId=${user.id} | email=${maskEmail(user.email)} | ip=${ip}`
     )
@@ -151,7 +162,9 @@ export async function userSignup(req: Request, res: Response) {
       verified: user.emailVerified
     })
   } catch (err: unknown) {
-    // Handle unique email constraint (duplicate signup)
+    // 6. Handle Race Conditions
+    // In high-traffic systems, two users might submit the same email at the exact same millisecond.
+    // The DB unique constraint (P2002) is our final line of defense.
     if (
       err instanceof Prisma.PrismaClientKnownRequestError &&
       err.code === 'P2002'
@@ -164,32 +177,14 @@ export async function userSignup(req: Request, res: Response) {
 
     const errorMessage = err instanceof Error ? err.message : String(err)
 
-    // Log unexpected errors
+    // Log unexpected errors for debugging (DB down, Connection timeouts, etc.)
     logger.error(
       `Signup failed (System Error) | email=${maskEmail(email)} | error=${errorMessage}`
     )
-    throw err // Let global error handler respond
+    throw err // Let global error middleware handle the 500 internal server error.
   }
 }
 
-/**
- * Verify a user's email address using a one-time verification token.
- *
- * Flow:
- *  - Extract token from query/body.
- *  - Hash the token to match what is stored in the database.
- *  - Check that the token is:
- *      • Valid (exists in DB)
- *      • Not expired
- *      • Not already used
- *  - Perform a timing-safe comparison to avoid token leak attacks.
- *  - Mark email as verified and invalidate the token.
- *
- * @param req - Express request object
- * @param res - Express response object
- * @returns JSON success response if verification succeeds
- * @throws AppError - If token is missing or invalid
- */
 export async function userVerifyEmail(req: Request, res: Response) {
   // Extract raw token from either query param or request body
   const rawToken = req.query.token ?? req.body?.token
@@ -237,29 +232,6 @@ export async function userVerifyEmail(req: Request, res: Response) {
   return ApiResponse.success(req, res, 200, Messages.EMAIL_VERIFIED)
 }
 
-/**
- * Log a user into their account.
- *
- * Flow:
- *  1) Validate input.
- *  2) Lookup user by email.
- *  3) Enforce account lock and login attempt throttling.
- *  4) Verify password.
- *  5) Generate access + refresh tokens.
- *  6) Revoke old refresh tokens and store new one (single-session model).
- *  7) Send refresh token as httpOnly cookie.
- *  8) Return safe user data + short-lived access token.
- *
- * Security Notes:
- *  - `failedLogins` prevents brute-force attacks.
- *  - `refreshToken` is hashed in DB (token theft-safe).
- *  - `httpOnly` cookie prevents XSS theft.
- *  - Revoking previous tokens enforces 1 active session per user/device.
- *
- * @param req Express Request
- * @param res Express Response
- * @returns Authenticated user and tokens
- */
 export async function userLogin(req: Request, res: Response) {
   // 1. Validate request body
   const parsed = await loginValidator.safeParseAsync(req.body)
@@ -428,28 +400,6 @@ export async function userLogout(req: Request, res: Response) {
   return ApiResponse.success(req, res, 200, Messages.LOGOUT_SUCCESS)
 }
 
-/**
- * Refresh the user's session by rotating the refresh token.
- *
- * Flow:
- *  1) Extract refresh token from httpOnly cookie.
- *  2) Verify the refresh JWT signature + expiry.
- *  3) Convert jti -> hashed jti and lookup refresh token in DB.
- *  4) Validate token status: must exist, not revoked, not expired.
- *  5) Rotate token:
- *      - Revoke old token entry.
- *      - Create new refresh token entry.
- *      - Send new refresh token cookie to client.
- *  6) Issue new short-lived access token in response.
- *
- * Security:
- *  - Refresh tokens are hashed in DB → theft-safe.
- *  - Rotation prevents replay attacks.
- *  - Revoking all tokens on mismatch prevents token substitution attacks.
- *
- * @param req Express Request
- * @param res Express Response
- */
 export async function refreshHandler(req: Request, res: Response) {
   const rawRefresh = req.cookies?.[REFRESH_COOKIE_NAME]
 
@@ -592,7 +542,6 @@ export async function userProfile(req: Request, res: Response) {
 
   const cacheKey = `user:${id}`
 
-  // 1) Try Cache First
   const cached = await redisCache.get(cacheKey)
   if (cached) {
     const user = JSON.parse(cached)
@@ -602,7 +551,6 @@ export async function userProfile(req: Request, res: Response) {
     })
   }
 
-  // 2) Cache Miss → Fetch from DB
   const user = await prisma.user.findUnique({
     where: { id },
     select: {
@@ -621,7 +569,6 @@ export async function userProfile(req: Request, res: Response) {
     throw new AppError(Messages.USER_NOT_FOUND, 404)
   }
 
-  // 3) Store into Cache (optional TTL)
   await redisCache.set(cacheKey, JSON.stringify(user), 'EX', 3600) // 10 min cache
 
   return ApiResponse.success(req, res, 200, Messages.PROFILE_FETCHED, {
@@ -729,8 +676,6 @@ export async function userChangePassword(req: Request, res: Response) {
   const isValid = await comparePassword(currentPassword, user.passwordHash)
 
   if (!isValid) {
-    // We do NOT increment 'failedLogins' here because the user is already authenticated.
-    // Just reject the request.
     throw new AppError(Messages.INVALID_OLD_PASSWORD, 400)
   }
 
@@ -745,7 +690,6 @@ export async function userChangePassword(req: Request, res: Response) {
       }
     }),
 
-    // SECURITY: Revoke ALL other sessions except the current one.
     prisma.userRefreshToken.updateMany({
       where: { userId },
       data: { revoked: true, replacedBy: 'Password Change' }
@@ -798,19 +742,18 @@ export async function userRequestVerification(req: Request, res: Response) {
   })
 
   try {
-    await emailQueue.add('verificationEmail', {
+    await enqueueEmail({
+      type: 'verificationEmail', // TypeScript will autocomplete this!
       to: user.email,
-      subject: 'Verify Your Email',
-      html: verifyEmailTemplate({
-        name: user.firstName,
+      data: {
+        firstName: user.firstName,
         token: rawToken
-      })
+        // If you miss 'token' here, TypeScript will throw an error immediately.
+      }
     })
 
     logger.info(`Verification email requested | userId=${user.id}`)
   } catch (queueError) {
-    // If Redis fails, we log it. The user will see a "Success" message but receives no email.
-    // They can simply click "Resend" again later.
     logger.error(
       `Failed to queue verification email (Resend) | userId=${user.id} | error=${queueError}`
     )
@@ -842,12 +785,10 @@ export async function userRequestResetPassword(req: Request, res: Response) {
     logger.info(
       `Password reset requested for non-existent email | email=${maskEmail(email)}`
     )
-    // Fake delay (optional) could be added here to match DB write time, but usually overkill for V1.
     return ApiResponse.success(req, res, 200, Messages.PASSWORD_RESET_REQUESTED)
   }
 
   if (user.isDisabled) {
-    // If account is locked, we probably shouldn't let them reset the password.
     logger.warn(`Password reset blocked: Account disabled | userId=${user.id}`)
     throw new AppError(Messages.ACCOUNT_LOCKED, 403)
   }
@@ -865,13 +806,14 @@ export async function userRequestResetPassword(req: Request, res: Response) {
   })
 
   try {
-    await emailQueue.add('resetPasswordEmail', {
+    await enqueueEmail({
+      type: 'resetPasswordEmail', // TypeScript will autocomplete this!
       to: user.email,
-      subject: 'Reset Your Password',
-      html: resetPasswordEmailTemplate({
-        name: user.firstName,
+      data: {
+        firstName: user.firstName,
         token: rawToken
-      })
+        // If you miss 'token' here, TypeScript will throw an error immediately.
+      }
     })
     logger.info(`Reset Password email requested | userId=${user.id}`)
   } catch (queueError) {
@@ -917,20 +859,16 @@ export async function userResetPassword(req: Request, res: Response) {
   const newPasswordHash = await hashPassword(newPassword)
 
   await prisma.$transaction([
-    // Update User Password & Clear Token
     prisma.user.update({
       where: { id: user.id },
       data: {
         passwordHash: newPasswordHash,
         passwordChangedAt: new Date(),
-        passwordResetTokenHash: null, // Prevent reuse
-        passwordResetExpiresAt: null, // Cleanup
+        passwordResetTokenHash: null,
+        passwordResetExpiresAt: null,
         passwordResetUsed: true
       }
     }),
-
-    // SECURITY: Revoke all sessions.
-    // If a hacker had access, they are now locked out and must login with the new password.
     prisma.userRefreshToken.updateMany({
       where: { userId: user.id, revoked: false },
       data: {
@@ -945,5 +883,5 @@ export async function userResetPassword(req: Request, res: Response) {
   return ApiResponse.success(req, res, 200, Messages.PASSWORD_RESET_SUCCESS)
 }
 
-export async function userSessions() {}
-export async function userSessionsRemove() {}
+// export async function userSessions() {}
+// export async function userSessionsRemove() {}
