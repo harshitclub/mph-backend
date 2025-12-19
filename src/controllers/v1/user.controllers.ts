@@ -743,7 +743,7 @@ export async function userRequestVerification(req: Request, res: Response) {
 
   try {
     await enqueueEmail({
-      type: 'verificationEmail', // TypeScript will autocomplete this!
+      type: 'reVerificationEmail', // TypeScript will autocomplete this!
       to: user.email,
       data: {
         firstName: user.firstName,

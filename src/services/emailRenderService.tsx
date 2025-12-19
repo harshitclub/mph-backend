@@ -7,6 +7,7 @@ import { ResetPassword } from '../emails/templates/auth/ResetPassword'
 
 // Import Types
 import { EmailJobData } from '../queues/email.queue'
+import ReVerification from '../emails/templates/auth/ReVerification'
 
 interface RenderResult {
   html: string
@@ -34,6 +35,17 @@ export const EmailRenderService = {
           <ResetPassword firstName={firstName} resetUrl={resetUrl} />
         )
         return { html, subject: 'Reset your password' }
+      }
+
+      case 'reVerificationEmail': {
+        const { firstName, token } = jobData.data
+        const verifyUrl = `${config.FRONTEND_URL}/verify?token=${token}`
+
+        const html = await render(
+          <ReVerification firstName={firstName} verifyUrl={verifyUrl} />
+        )
+
+        return { html, subject: 'Verify your email address' }
       }
 
       // FUTURE: Easy to add new cases here without touching the Worker!
