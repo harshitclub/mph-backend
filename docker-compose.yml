@@ -1,0 +1,99 @@
+version: '3.8'
+
+services:
+  # ==========================================
+  # 1. API SERVER
+  # ==========================================
+  api:
+    build: .
+    container_name: mph_backend_api
+    restart: always
+    ports:
+      - "3002:3002"
+    env_file:
+      - .env # 👈 Loads Upstash URL, DB URL, Secrets automatically
+    environment:
+      - NODE_ENV=production
+      # 🚨 OVERRIDE: Point to the internal Docker container, NOT localhost
+      - REDIS_BULL_URL=redis://redis_queue:6379
+    depends_on:
+      - redis_queue
+    command: node dist/index.js
+    networks:
+      - mph_network
+
+  # ==========================================
+  # 2. BACKGROUND WORKER
+  # ==========================================
+  worker:
+    build: .
+    container_name: mph_email_worker
+    restart: always
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+      # 🚨 OVERRIDE: Point to the internal Docker container
+      - REDIS_BULL_URL=redis://redis_queue:6379
+    depends_on:
+      - redis_queue
+    command: node dist/workers/email.worker.js
+    networks:
+      - mph_network
+  
+  # ==========================================
+  # 3. LOCAL REDIS (For BullMQ Only)
+  # ==========================================
+  redis_queue:
+    image: redis:alpine
+    container_name: mph_redis_queue
+    restart: always
+    # Maps Host Port 6380 -> Container Port 6379
+    # This matches your .env "localhost:6380" so you can debug from your laptop too!
+    ports:
+      - "6380:6379"
+    networks:
+      - mph_network
+  
+  # ==========================================
+  # 4. PROMETHEUS (The Database)
+  # ==========================================
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: mph_prometheus
+    restart: always
+    ports:
+      - "9090:9090" # Web UI port
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml # Mount our config
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+    networks:
+      - mph_network
+  
+  # ==========================================
+  # 5. GRAFANA (The Dashboard)
+  # ==========================================
+  grafana:
+    image: grafana/grafana:latest
+    container_name: mph_grafana
+    restart: always
+    ports:
+      - "3001:3000" # Map host 3001 to container 3000
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin # Default password
+    volumes:
+      - grafana_data:/var/lib/grafana # Persist dashboards so they don't vanish on restart
+    depends_on:
+      - prometheus
+    networks:
+      - mph_network
+
+# Define persistent storage for Grafana
+volumes:
+  grafana_data:
+
+networks:
+  mph_network:
+    driver: bridge
+    
