@@ -25,6 +25,9 @@ import systemRoutesV1 from './routes/v1/system.routes'
 import userRoutesV1 from './routes/v1/user.routes'
 import adminRoutesV1 from './routes/v1/admin.routes'
 
+import { register } from './configs/monitoring'
+import { metricsMiddleware } from './middlewares/monitoringMiddleware'
+
 const app: Application = express()
 
 // --- MIDDLEWARE ---
@@ -52,6 +55,12 @@ app.use(cookieParser())
 app.use(compression())
 app.use(hpp())
 app.disable('x-powered-by')
+app.use(metricsMiddleware)
+
+app.get('/metrics', async (req, res) => {
+  res.setHeader('Content-Type', register.contentType)
+  res.send(await register.metrics())
+})
 
 // --- ROUTES ---
 

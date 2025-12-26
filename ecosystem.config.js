@@ -5,7 +5,10 @@ module.exports = {
       script: './dist/index.js',
       instances: 'max',
       exec_mode: 'cluster',
-      watch: 'false',
+      watch: false,
+      env: {
+        NODE_ENV: 'production'
+      },
       env_production: {
         NODE_ENV: 'production'
       }
@@ -15,7 +18,10 @@ module.exports = {
       script: './dist/workers/email.worker.js',
       instances: 1, // runs on single instance
       exec_mode: 'fork', // not cluster
-      watch: false
+      watch: false,
+      env: {
+        NODE_ENV: 'production'
+      }
     }
   ]
 }

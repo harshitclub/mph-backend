@@ -1,23 +1,36 @@
-# Use Node 20 LTS as base image
-FROM node:20-alpine
+# ----------------------------
+# STAGE 1: BUILDER
+# ----------------------------
+FROM node:lts-alpine AS builder
+WORKDIR /app
 
-# Set working directory inside container
-WORKDIR /usr/src/app
-
-# Copy package.json and package-lock.json first (for caching)
+# Install dependencies (including devDependencies for build)
 COPY package*.json ./
+COPY prisma ./prisma/
+RUN npm ci
 
-# Install all dependencies
-RUN npm install
-
-# Copy the rest of the project (including prisma folder)
+# Generate Prisma Client & Build
+RUN npx prisma generate
 COPY . .
-
-# Build TypeScript
 RUN npm run build
 
-# Expose port your app runs on
-EXPOSE 3002
+# ----------------------------
+# STAGE 2: RUNNER (Production)
+# ----------------------------
+FROM node:lts-alpine AS runner
+WORKDIR /app
+ENV NODE_ENV=production
 
-# Start app with PM2 in production
-CMD ["npm", "run", "pm2:start"]
+# Install only production dependencies
+COPY package*.json ./
+RUN npm ci --only=production
+
+# Copy built artifacts from builder
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/prisma ./prisma
+
+# Important: Re-generate Prisma for the specific OS (Alpine Linux)
+RUN npx prisma generate
+
+EXPOSE 3002
+CMD ["node", "dist/index.js"]

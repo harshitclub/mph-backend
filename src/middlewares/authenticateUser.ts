@@ -24,6 +24,8 @@ export async function authenticateUser(
       throw new AppError(Messages.TOKEN_REQUIRED, 401)
     }
 
+    console.log(authHeader)
+
     const token = authHeader.split(' ')[1]
     if (!token) {
       throw new AppError(Messages.TOKEN_INVALID, 401)

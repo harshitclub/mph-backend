@@ -46,4 +46,6 @@
  * * Closes #145
  * */
 
-// docker run --name redis_queue -p 6380:6379 -d redis:alpine3.22
+// docker run -d --name mph-redis-bull -p 6380:6379 redis
+// docker-compose up -d --build
+// docker-compose logs -f

@@ -1,0 +1,7 @@
+global:
+  scrape_interval: 5s # Scrape data every 5 seconds (Real-time feel)
+
+scrape_configs:
+  - job_name: 'mph-backend'
+    static_configs:
+      - targets: ['api:3002'] # 'api' matches the service name in docker-compose
