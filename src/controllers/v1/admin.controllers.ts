@@ -2,8 +2,7 @@ import { Request, Response } from 'express'
 import { logger } from '../../configs/logger'
 import { Messages } from '../../configs/messages'
 import { prisma } from '../../configs/prisma'
-import { verifyEmailTemplate } from '../../emails/templates/auth/WelcomeEmail.tsx'
-import { emailQueue } from '../../queues/email.queue'
+import { enqueueEmail } from '../../queues/email.queue'
 import { AppError } from '../../utils/appError'
 import { maskEmail } from '../../utils/mask'
 import { comparePassword, hashPassword } from '../../utils/password'
@@ -33,7 +32,6 @@ import {
 } from '../../validators/user.validator'
 import { isObject } from '../../utils/isObject'
 import { generateResetPasswordTokenRaw } from '../../utils/tokens/resetPasswordToken'
-import { resetPasswordEmailTemplate } from '../../emails/templates/auth/ResetPassword'
 
 const { REFRESH_COOKIE_NAME, REFRESH_COOKIE_PATH, REFRESH_TTL_MS } =
   config.COOKIE
@@ -92,13 +90,14 @@ export async function adminSignup(req: Request, res: Response) {
     })
 
     try {
-      await emailQueue.add('verificationEmail', {
+      await enqueueEmail({
+        type: 'verificationEmail', // TypeScript will autocomplete this!
         to: admin.email,
-        subject: 'Verify Your Email',
-        html: verifyEmailTemplate({
-          name: admin.firstName,
+        data: {
+          firstName: admin.firstName,
           token: rawToken
-        })
+          // If you miss 'token' here, TypeScript will throw an error immediately.
+        }
       })
     } catch (queueError) {
       logger.error(
@@ -532,13 +531,14 @@ export async function adminRequestResetPassword(req: Request, res: Response) {
   })
 
   try {
-    await emailQueue.add('resetPasswordEmail', {
+    await enqueueEmail({
+      type: 'reVerificationEmail', // TypeScript will autocomplete this!
       to: admin.email,
-      subject: 'Reset Your Password',
-      html: resetPasswordEmailTemplate({
-        name: admin.firstName,
+      data: {
+        firstName: admin.firstName,
         token: rawToken
-      })
+        // If you miss 'token' here, TypeScript will throw an error immediately.
+      }
     })
     logger.info(`Reset Password email requested | userId=${admin.id}`)
   } catch (queueError) {
