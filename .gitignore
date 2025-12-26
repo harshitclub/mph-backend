@@ -55,20 +55,3 @@ yarn-debug.log*
 # Nodemon (a common development tool)
 # Nodemon can create a JSON file to track its state, which should be ignored.
 .nodemon.json
-/src/generated/prisma
-
-/src/generated/prisma
-
-/src/generated/prisma
-
-/src/generated/prisma
-
-/src/generated/prisma
-
-/src/generated/prisma
-
-/src/generated/prisma
-
-/src/generated/prisma
-
-/src/generated/prisma
